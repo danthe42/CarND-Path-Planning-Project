@@ -243,9 +243,13 @@ int main() {
                     double car_yaw = j[1]["yaw"];
                     double car_speed = j[1]["speed"];
 
+                    gHighwayState->car_cur_s = car_s;
+					gHighwayState->car_cur_d = car_d;
+
                     // Previous path data given to the Planner
                     auto previous_path_x = j[1]["previous_path_x"];
                     auto previous_path_y = j[1]["previous_path_y"];
+
                     // Previous path's end s and d values 
                     double end_path_s = j[1]["end_path_s"];
                     double end_path_d = j[1]["end_path_d"];
@@ -267,7 +271,7 @@ int main() {
 						predictions.emplace(std::pair(it[0], VehicleState(it[5], speed, 0, it[6], 0, 0)));
 					}
 
-					int prev_size = previous_path_x.size();
+					size_t prev_size = previous_path_x.size();
 
                     if (prev_size > 0)
                     {
@@ -276,7 +280,20 @@ int main() {
                     }
                     car_speed = mph2mps(car_speed);
 
+                    gHighwayState->prev_path_x.clear();
+					gHighwayState->prev_path_y.clear();
+                    for (int i = 0; i < prev_size; i++)
+                    {
+                        gHighwayState->prev_path_x.push_back( previous_path_x[i] );
+                        gHighwayState->prev_path_y.push_back( previous_path_y[i] );
+                    }
+
 					Trajectory tr = gHighwayState->advance(car_s, car_d, car_speed, (double)prev_size * 0.02, predictions);
+
+                    // use the new "prev_path"
+                    prev_size = gHighwayState->prev_path_x.size();
+                    vector<double> &new_previous_path_x = gHighwayState->prev_path_x;
+					vector<double> &new_previous_path_y = gHighwayState->prev_path_y;
 
                     vector<double> ptsx, ptsy;
                     double ref_x = car_x;
@@ -295,15 +312,15 @@ int main() {
                     else 
                     {
                         bool bAddPrevPoint = true;
-                        ref_x = previous_path_x[prev_size - 1];
-						ref_y = previous_path_y[prev_size - 1];
-						double ref_x_prev = previous_path_x[prev_size - 2];
-						double ref_y_prev = previous_path_y[prev_size - 2];
+                        ref_x = new_previous_path_x[prev_size - 1];
+						ref_y = new_previous_path_y[prev_size - 1];
+						double ref_x_prev = new_previous_path_x[prev_size - 2];
+						double ref_y_prev = new_previous_path_y[prev_size - 2];
                         ref_yaw = atan2(ref_y - ref_y_prev, ref_x - ref_x_prev);
                         if (ref_x == ref_x_prev && abs(ref_yaw) < 0.0001) {
                             // spline generator doesn't like when dx=0, so, avoid this case
-							ref_x_prev = previous_path_x[0];
-							ref_y_prev = previous_path_y[0];
+							ref_x_prev = new_previous_path_x[0];
+							ref_y_prev = new_previous_path_y[0];
 							ref_yaw = atan2(ref_y - ref_y_prev, ref_x - ref_x_prev);
                             if (ref_x == ref_x_prev && abs(ref_yaw) < 0.0001) {
                                 bAddPrevPoint = false;
@@ -343,8 +360,8 @@ int main() {
 
                     for (int i = 0; i < prev_size; i++)
                     {
-                        next_x_vals.push_back(previous_path_x[i]);
-						next_y_vals.push_back(previous_path_y[i]);
+                        next_x_vals.push_back(new_previous_path_x[i]);
+						next_y_vals.push_back(new_previous_path_y[i]);
                     }
                     double target_x = 30.0;
                     double target_y = s(target_x);
