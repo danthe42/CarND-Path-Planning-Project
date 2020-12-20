@@ -89,7 +89,7 @@ VehicleState VehicleState::state_in(double T) const
 	);
 };
 
-VehicleState VehicleState::offset(vector<double> delta) const
+VehicleState VehicleState::offset(vector<double> delta, double dt) const
 {
 	return VehicleState(s + delta[0], sdot + delta[1], s2dot + delta[2], d + delta[3], ddot + delta[4], d2dot + delta[5], t);
 }
@@ -187,4 +187,101 @@ Trajectory Trajectory::Generate(vector<double> start_s, vector<double> start_d, 
     }
 
     return std::move(best);
+}
+
+// -------------------------------------
+HighwayState::HighwayState()
+{
+    state = KL;
+	lane = 1;
+	ref_vel = 0.0;
+}
+
+vector<StateType> HighwayState::successor_states()
+{
+	vector<StateType> rv;
+	rv.push_back(KL);
+	// ...
+	return std::move(rv);
+}
+
+void HighwayState::set_optimal_speed(double v)
+{
+    v = std::min(v, OPTIMAL_SPEED);
+    v = std::max(v, 0.0);
+
+    if (v > ref_vel)
+    {
+        if (v - ref_vel > .1)
+        {
+            ref_vel += .1;
+        }
+        else ref_vel = v;
+    }
+    else 
+    {
+		if (ref_vel - v > .1)
+		{
+			ref_vel -= .1;
+		}
+		else ref_vel = v;
+    }
+}
+
+// Car_end_s,card_end_d are the position of our car at the end of the earlier planned route (after car_end_dt sec).
+Trajectory HighwayState::advance(double car_end_s, double car_end_d, double car_speed, double car_end_dt, const map<int, VehicleState>& predictions)
+{
+    assert(car_speed >= 0);
+    assert(car_speed < SPEED_LIMIT);
+    assert(car_end_d >= 0);
+    assert(car_end_d < LANE_WIDTH * LANE_COUNT);
+    assert(car_end_s >= 0);
+    assert(car_end_dt >= 0);
+
+    // get next state
+    vector<StateType> next_state = successor_states();
+
+	int vehicle_front_of_us = -1;
+	double min_dist = std::numeric_limits<double>::infinity();
+	for (const auto& it : predictions)
+	{
+		VehicleState v = it.second.state_in(car_end_dt);
+
+		if (v.d<(2 + 4 * lane + 2) && v.d>(2 + 4 * lane - 2))           // is the other vehicle in our lane ?            
+		{
+			if (car_end_s < v.s) {
+				double dist = v.s - car_end_s;
+				if (dist < min_dist)
+				{
+					min_dist = dist;
+					vehicle_front_of_us = it.first;
+				}
+			}
+		}
+	}
+
+	if (vehicle_front_of_us != -1 && min_dist < MIN_DIST_FROM_CAR_IN_FRONT_OF_US)
+	{
+		set_optimal_speed(ref_vel-.1);					// too close ! 
+	}
+	else if (vehicle_front_of_us != -1 && predictions.at(vehicle_front_of_us).sdot<ref_vel)
+	{
+		double vdiff = ref_vel - predictions.at(vehicle_front_of_us).sdot;
+		if (min_dist < vdiff * SPEED_ALIGN_MULTIPLER)
+		{
+			set_optimal_speed(predictions.at(vehicle_front_of_us).sdot - FOLLOWING_SPEED_DIFF);
+			lane = 0;
+		}
+		else 
+		{
+			// if there's a car ahead of us but far, don't change speed.
+//			set_optimal_speed(ref_vel);
+			set_optimal_speed(OPTIMAL_SPEED);
+		}
+	}
+    else {
+		set_optimal_speed(OPTIMAL_SPEED);
+    }
+
+    return {};
 }
