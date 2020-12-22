@@ -6,6 +6,7 @@ const double LANE_WIDTH = 4.0;
 const int LANE_COUNT = 3;
 const int frames_per_sec = 50;				// 1 step / 0.02 sec.	
 
+#define USE_LOGGING
 //#define GT 
 
 #ifdef GT
@@ -13,29 +14,34 @@ const int frames_per_sec = 50;				// 1 step / 0.02 sec.
 	const double FOLLOWING_SPEED_DIFF = 0;
 	const double SPEED_ALIGN_MULTIPLER = 4.0;
 	const double MIN_DIST_FROM_CAR_IN_FRONT_OF_US = 10.0;
-	const double SAFE_DISTANCE_FOR_LANE_CHANGE = 7.5;
+	const double SAFE_DISTANCE_FOR_LANE_CHANGE_AHEAD = 20;
+	const double SAFE_DISTANCE_FOR_LANE_CHANGE_BEHIND = 5.5;
 	const double CONVENIENCE_COST = 0.001;
-	const double MIN_DURATION_IN_A_LANE = 3;
+	const double MIN_DURATION_BETWEEN_TWO_LANE_CHANGES = 3;
 
 #else 
 	const double SPEED_LIMIT = 50.0 / 2.237;					// 50 MPH in m/s
-	const double FOLLOWING_SPEED_DIFF = 0.05;
+	const double FOLLOWING_SPEED_DIFF = 0.5;
 	const double SPEED_ALIGN_MULTIPLER = 6.0;
 	const double MIN_DIST_FROM_CAR_IN_FRONT_OF_US = 30.0;
-	const double SAFE_DISTANCE_FOR_LANE_CHANGE_AHEAD = 25;
-	const double SAFE_DISTANCE_FOR_LANE_CHANGE_BEHIND = 7.5;
+	const double SAFE_DISTANCE_FOR_LANE_CHANGE_AHEAD = 30.0;
+	const double SAFE_DISTANCE_FOR_LANE_CHANGE_BEHIND = 5.0;
 	const double CONVENIENCE_COST = 0.01;
 	const double MIN_DURATION_BETWEEN_TWO_LANE_CHANGES = 6;
+	const double MAX_SPEED_DIFF_AT_CHANGING_LANES = 5;
 #endif 
 
-const double OPTIMAL_SPEED = SPEED_LIMIT * 0.95;					
+const double OPTIMAL_SPEED = SPEED_LIMIT * 0.99;					
 
 #include <map>
 #include <vector>
+#include <iostream>
+#include <fstream>
 #include "helpers.h"
 
 using std::vector;
 using std::map;
+using std::ofstream;
 
 struct VehicleState {
 	double s, sdot, s2dot;
@@ -54,23 +60,6 @@ struct VehicleState {
     VehicleState perturb() const;
 };
 
-struct Trajectory {
-	vector<double> vals;
-	Trajectory(vector<double> s_coeffs, vector<double> d_coeffs, double t) {
-		vals = { s_coeffs[0], s_coeffs[1], s_coeffs[2], d_coeffs[0], d_coeffs[1], d_coeffs[2], t };
-	}
-	Trajectory() {
-		vals = { 0,0,0,0,0,0,0 };
-	}
-    Trajectory(vector<double> start_s, vector<double> start_d, VehicleState& goal);
-
-	static Trajectory Generate(vector<double> start_s, vector<double> start_d, int target_vehicle, vector<double> delta, double T, const map<int, VehicleState>& predictions);
-
-private:
-	static vector<double> JMT(vector<double>& start, vector<double>& end, double T);
-
-};
-
 enum StateType {
 	KL,
 	LCL,
@@ -84,33 +73,45 @@ public:
 	double ref_vel;
 	long int frame_cnt = 0;
 	long int last_lane_changed_frame_cnt = -1;
+	ofstream logfile;
 
 	// temporary variables
 	// contains valid variables only for the current advance() call.
 	double car_end_s;
 	double car_end_d;
-	double car_speed;
 	double car_end_dt;
 	vector<double> prev_path_x;
 	vector<double> prev_path_y;
+	// current state of the car
 	double car_cur_s;
 	double car_cur_d;
+	double car_cur_yaw;
+	double car_cur_speed;
 	// ------
 
 	HighwayState();
-	Trajectory advance(double _car_end_s, double _car_end_d, double _car_speed, double _car_end_dt, const map<int, VehicleState>& predictions);
+	~HighwayState();
+
+	void advance(const map<int, VehicleState>& predictions);
 	int get_closest_ahead(double s, double d, double dt, const map<int, VehicleState>& predictions, double& dist);
 	int get_closest_behind(double s, double d, double dt, const map<int, VehicleState>& predictions, double& dist);
 
 private:
-	StateType state;						// Our current state
-
+	StateType state;						// Our state at the end of the previously planned path
+	const char* str(StateType st);
+	const char* str_frame();
+	const char* state_name(StateType st);
 	void set_optimal_speed(double v);
 	double calculate_cost(StateType next_state, const map<int, VehicleState>& predications);
 	vector<StateType> successor_states();
-};
 
-double calculate_cost(const Trajectory& tr, int target_vehicle, vector<double> delta, double T, const map<int, VehicleState>& predications);
+	// When something unexpected happens and an other is very close or in the previously planned path:
+	// - Drop previously planned path
+	// - Keep in the lane where the car currently is, for at least a few seconds.
+	// - don't modify the speed
+	void emergency();	
+
+};
 
 #endif  // COMMON_H
 

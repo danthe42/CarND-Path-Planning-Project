@@ -4,6 +4,7 @@
 #include <map>
 #include <unordered_map>
 #include <random>
+#include <sstream>
 #include "Eigen-3.3/Eigen/Dense"
 #include "common.h"
 
@@ -13,9 +14,34 @@ using std::vector;
 using std::map;
 using std::max;
 using std::min;
+using std::stringstream;
 using std::unordered_map;
+using std::endl;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
+
+double speed_difference_cost(HighwayState* hw, StateType next_state, const map<int, VehicleState>& predications)
+{
+	int ln;
+	switch (next_state)
+	{
+	case KL: return 0;
+	case LCL: ln = hw->lane - 1; break;
+	case LCR: ln = hw->lane + 1; break;
+	default:
+		assert(false);
+		break;
+	}
+	double behind_dist;
+	int vbehind = hw->get_closest_behind(hw->car_end_s, ln * LANE_WIDTH + LANE_WIDTH / 2, hw->car_end_dt, predications, behind_dist);
+	if (vbehind == -1) return 0;
+	double behind_speed = predications.at(vbehind).sdot;
+	if (hw->car_cur_speed >= behind_speed) return 0;
+	double spd_diff = behind_speed - hw->car_cur_speed;
+	if (spd_diff > MAX_SPEED_DIFF_AT_CHANGING_LANES) return std::numeric_limits<double>::infinity();
+	double cost = 1 - exp(-spd_diff / behind_dist);
+	return cost;
+}
 
 double lane_stay_cost(HighwayState* hw, StateType next_state, const map<int, VehicleState>& predications)
 {
@@ -53,17 +79,17 @@ double lane_speed_cost(HighwayState* hw, StateType next_state, const map<int, Ve
 		return std::numeric_limits<double>::infinity();
 	}
 	int vbehind = hw->get_closest_behind(hw->car_end_s, ln * LANE_WIDTH + LANE_WIDTH / 2, hw->car_end_dt, predications, behind_dist);
-	if (next_state != KL && vbehind != -1 && behind_dist < SAFE_DISTANCE_FOR_LANE_CHANGE_BEHIND)
+	if (next_state != KL && vbehind != -1 && behind_dist < SAFE_DISTANCE_FOR_LANE_CHANGE_BEHIND + hw->car_end_s - hw->car_cur_s)
 	{
 		return std::numeric_limits<double>::infinity();
 	}
 
 	if (vahead == -1) return 0;				// very good
 	double lnspeed = predications.at(vahead).sdot;
-	if (vbehind != -1)
+/*	if (vbehind != -1)
 	{
 		lnspeed = min( lnspeed, predications.at(vbehind).sdot );
-	} 
+	} */
 	double cost = exp(-lnspeed/10);
 	return cost;
 }
@@ -100,43 +126,9 @@ vector<std::pair< std::function<double(HighwayState* hwstate, StateType next_sta
 	{ lane_stay_cost, 1 },				// 0 or infinity cost function
 	{ lane_speed_cost, 3 },
 	{ convenience_cost, 1 },
-	{ space_ahead_cost, 1 },
+	{ space_ahead_cost, 2.0 },
+	{ speed_difference_cost, 0.5 }
 };
-
-vector<double> Trajectory::JMT(vector<double>& start, vector<double>& end, double T)
-{
-    /**
-     * Calculate the Jerk Minimizing Trajectory that connects the initial state
-     * to the final state in time T.
-     *
-     * @param start - the vehicles start location given as a length three array
-     *   corresponding to initial values of [s, s_dot, s_double_dot]
-     * @param end - the desired end state for vehicle. Like "start" this is a
-     *   length three array.
-     * @param T - The duration, in seconds, over which this maneuver should occur.
-     *
-     * @output an array of length 6, each value corresponding to a coefficent in
-     *   the polynomial:
-     *   s(t) = a_0 + a_1 * t + a_2 * t**2 + a_3 * t**3 + a_4 * t**4 + a_5 * t**5
-     *
-     * EXAMPLE
-     *   > JMT([0, 10, 0], [10, 10, 0], 1)
-     *     [0.0, 10.0, 0.0, 0.0, 0.0, 0.0]
-     */
-
-    MatrixXd C = MatrixXd(3, 1);
-    C << end[0] - (start[0] + start[1] * T + start[2] * T * T / 2),
-        end[1] - (start[1] + start[2] * T),
-        end[2] - start[2];
-
-    MatrixXd A = MatrixXd(3, 3);
-    A << T * T * T, T* T* T* T, T* T* T* T* T,
-        3 * T * T, 4 * T * T * T, 5 * T * T * T * T,
-        6 * T, 12 * T * T, 20 * T * T * T;
-    MatrixXd D = A.inverse() * C;
-
-    return { start[0],start[1],start[2] / 2,D.data()[0],D.data()[1],D.data()[2] };
-}
 
 VehicleState VehicleState::state_in(double T) const 
 {
@@ -170,109 +162,80 @@ VehicleState VehicleState::perturb() const
 	return VehicleState(dist0(e2), dist1(e2), dist2(e2), dist3(e2), dist4(e2), dist5(e2), t);
 }
 
-Trajectory::Trajectory(vector<double> start_s, vector<double> start_d, VehicleState& goal) {
-	vector<double> s_goal = { goal.s, goal.sdot, goal.s2dot };
-	vector<double> d_goal = { goal.d, goal.ddot, goal.d2dot };
-	vector<double> scoeff = JMT(start_s, s_goal, goal.t);
-	vector<double> dcoeff = JMT(start_d, d_goal, goal.t);
-	vals = { scoeff[0], scoeff[1], scoeff[2], dcoeff[0], dcoeff[1], dcoeff[2], goal.t };
-}
-
-/* PTG: Polynomial Trajectory Generator
- Finds the best trajectory according to WEIGHTED_COST_FUNCTIONS(global).
-
-arguments:
-start_s - [s, s_dot, s_ddot]
-
-start_d - [d, d_dot, d_ddot]
-
-target_vehicle - id of leading vehicle(int) which can be used to retrieve
-that vehicle from the "predictions" dictionary.This is the vehicle that
-we are setting our trajectory relative to.
-
-delta - a length 6 array indicating the offset we are aiming for between us
-and the target_vehicle.So if at time 5 the target vehicle will be at
-[100, 10, 0, 0, 0, 0] and delta is[-10, 0, 0, 4, 0, 0], then our goal
-state for t = 5 will be[90, 10, 0, 4, 0, 0].This would correspond to a
-goal of "follow 10 meters behind and 4 meters to the right of target vehicle"
-
-T - the desired time at which we will be at the goal(relative to now as t = 0)
-
-predictions - dictionary of{ v_id: vehicle }. Each vehicle has a method
-vehicle.state_in(time) which returns a length 6 array giving that vehicle's
-expected[s, s_dot, s_ddot, d, d_dot, d_ddot] state at that time.
-
-return:
-(best_s, best_d, best_t) where best_s are the 6 coefficients representing s(t)
-best_d gives coefficients for d(t) and best_t gives duration associated w /
-this trajectory.
-*/
-/*
-Trajectory Trajectory::Generate(vector<double> start_s, vector<double> start_d, int target_vehicle, vector<double> delta, double T, const map<int, VehicleState>& predictions)
-{
-    auto it = predictions.find(target_vehicle);
-    assert(it != predictions.end());
-
-    const VehicleState& target = it->second;
-
-    // generate alternative goals
-    vector<VehicleState> goals;
-    double timestep = 0.5;
-    double t = T - 4 * timestep;
-    while (t <= T + 4 * timestep)
-    {
-        VehicleState target_state = target.state_in(t).offset(delta);
-        goals.emplace_back(target_state);
-
-        for (int i = 0; i < N_SAMPLES; i++)
-        {
-            goals.emplace_back(target_state.perturb());
-        }
-        t += timestep;
-    }
-
-    // find best trajectory
-    vector< Trajectory > trajectories;
-    for (int i = 0; i < goals.size(); i++) {
-        trajectories.emplace_back(start_s, start_d, goals[i]);
-    }
-
-    Trajectory best;
-    double min_cost = std::numeric_limits<double>::infinity();
-    for (int i = 0; i < trajectories.size(); i++)
-    {
-        const Trajectory& tr = trajectories[i];
-        double c = calculate_cost(tr, target_vehicle, delta, T, predictions);
-        if (c < min_cost) {
-            min_cost = c;
-            best = tr;
-        }
-    }
-
-    return std::move(best);
-}
-*/
-
 // -------------------------------------
 HighwayState::HighwayState()
 {
     state = KL;
 	lane = prev_lane = 1;
 	ref_vel = 0.0;
+#ifdef USE_LOGGING
+	logfile.open("log.txt");
+#endif 
 }
 
-double HighwayState::calculate_cost(StateType next_state, const map<int, VehicleState>& predications)
+HighwayState::~HighwayState()
 {
+#ifdef USE_LOGGING
+	logfile << "---END---" << endl;
+	logfile.close();
+#endif
+}
+
+const char* HighwayState::state_name(StateType st)
+{
+	static char buf[512];
+	sprintf(buf, "%s", st == KL ? "KL" : (st == LCR ? "LCR" : "LCL"));
+	return buf;
+}
+
+const char* HighwayState::str(StateType st)
+{
+	static char buf[512];
+	sprintf(buf, "%s (ln: %d, s: %lf, d :%lf v: %lf)", state_name(st), lane, car_cur_s, car_cur_d, car_cur_speed);
+	return buf;
+}
+
+const char* HighwayState::str_frame()
+{
+	static char buf[512];
+	int secs = int(frame_cnt / frames_per_sec);
+	int mins = int(secs / 60);
+	int hours = int(mins / 60);
+	sprintf(buf, "%d:%d:%d", hours, mins%60, secs-mins*60);
+	return buf;
+}
+
+double HighwayState::calculate_cost(StateType next_state, const map<int, VehicleState>& predictions)
+{
+	stringstream ss;
 	double cost = 0.0;
-	printf("%ld: [%s]: ", frame_cnt, next_state == KL ? "KL" : (next_state==LCR ? "LCR" : "LCL"));
+	bool bInf = false;
+	std::string infvector;
+	ss << str_frame() << " [" << str(next_state) << "] ";
+	int i = 0;
 	for (auto& it : WEIGHTED_COST_FUNCTIONS) {
-		double new_cost = it.first(this, next_state, predications);
-		printf("%lf ", new_cost);
-//		if (new_cost == std::numeric_limits<double>::infinity()) return new_cost;							// never select it (safety reasons or impossible, ...)
-//		assert(new_cost >= 0 && new_cost <= 1.0);
+		double new_cost = it.first(this, next_state, predictions);
+		if (new_cost == std::numeric_limits<double>::infinity())
+		{
+			bInf = true;
+			infvector += ('1' + i);
+		}
+		else {
+			infvector += ' ';
+		}
+		ss << new_cost << " ";
 		cost += it.second * new_cost;
+		i++;
 	}
-	printf("--> %lf\n ", cost);
+	if (!bInf)
+	{
+		ss << "--> " << cost << endl;
+		if (logfile.is_open()) logfile << ss.str();
+	}
+#ifdef USE_LOGGING
+	printf("%s [%s] - ", state_name(next_state), infvector.c_str());
+	if (logfile.is_open()) logfile << state_name(next_state) << " [" << infvector.c_str() << "]" << endl;
+#endif 
 	return cost;
 }
 
@@ -288,24 +251,30 @@ vector<StateType> HighwayState::successor_states()
 	return std::move(rv);
 }
 
+const double MAX_ACCELERATION = 0.15;
+
 void HighwayState::set_optimal_speed(double v)
 {
+	if (v < 10)
+	{
+		int alma = 0;
+	}
     v = std::min(v, OPTIMAL_SPEED);
     v = std::max(v, 0.0);
 
     if (v > ref_vel)
     {
-        if (v - ref_vel > .1)
+        if (v - ref_vel > MAX_ACCELERATION)
         {
-            ref_vel += .1;
+            ref_vel += MAX_ACCELERATION;
         }
         else ref_vel = v;
     }
     else 
     {
-		if (ref_vel - v > .1)
+		if (ref_vel - v > MAX_ACCELERATION)
 		{
-			ref_vel -= .1;
+			ref_vel -= MAX_ACCELERATION;
 		}
 		else ref_vel = v;
     }
@@ -357,14 +326,25 @@ int HighwayState::get_closest_behind(double s, double d, double dt, const map<in
 	return vehicle_id;
 }
 
-// Car_end_s,card_end_d are the position of our car at the end of the earlier planned route (after car_end_dt sec).
-Trajectory HighwayState::advance(double _car_end_s, double _car_end_d, double _car_speed, double _car_end_dt, const map<int, VehicleState>& predictions)
+void HighwayState::emergency()
 {
-	car_end_s = _car_end_s;
-	car_end_d = _car_end_d;
-	car_speed = _car_speed;
-	car_end_dt = _car_end_dt;
+	// clear previous path
+	int new_size = std::min((int)prev_path_x.size(), 2);
+	prev_path_x.erase(prev_path_x.begin() + new_size, prev_path_x.end());
+	prev_path_y.erase(prev_path_y.begin() + new_size, prev_path_y.end());
 
+	// our planned path's end position is the car position with dt=0
+	car_end_s = car_cur_s;
+	car_end_d = car_cur_d;
+	car_end_dt = 0.0;
+	ref_vel = car_cur_speed;						// to make it smooth ....
+	last_lane_changed_frame_cnt = frame_cnt;		// stay in that lane for a time
+	lane = int((car_cur_d - 2.0) / 4);				// stay in the lane where we are at the moment
+}
+
+// Car_end_s,card_end_d are the position of our car at the end of the earlier planned route (after car_end_dt sec).
+void HighwayState::advance(const map<int, VehicleState>& predictions)
+{
     //assert(car_speed >= 0);
     //assert(car_speed < SPEED_LIMIT);
     //assert(car_end_d >= 0);
@@ -373,26 +353,17 @@ Trajectory HighwayState::advance(double _car_end_s, double _car_end_d, double _c
     //assert(car_end_dt >= 0);
 
 	double dist=0;
-	int vid = get_closest_ahead(car_cur_s, car_cur_d, 0, predictions, dist); 
-	double slimit = car_cur_s + (car_end_s - car_cur_s) * 0.8;
+	int vid = get_closest_ahead(car_cur_s, lane * LANE_WIDTH + LANE_WIDTH / 2, 0, predictions, dist);
+	double slimit = car_end_s - car_cur_s;
 	if (vid != -1)
 	{
 		const VehicleState& veh = predictions.at(vid);
-		if (veh.s < slimit && veh.s > car_cur_s)
+		if (veh.s < car_cur_s + slimit && veh.s > car_cur_s - car_cur_s)
 		{
 			// emergency: a vehicle is on our preplanned path!
 
-			printf("Emergency ! Clearing previously planned path and replanning.\n");
-			// clear previous path
-			prev_path_x.clear();
-			prev_path_y.clear();
-
-			// out planned path's end position is the car position with dt=0
-			car_end_s = car_cur_s;
-			car_end_d = car_cur_d;
-			car_end_dt = 0.0;
-			ref_vel = car_speed;			// to make it smooth ....
-			if (last_lane_changed_frame_cnt!=-1) lane = prev_lane;				// If there was a lane change just recently, go back to the previous lane
+			if (logfile.is_open()) logfile << str_frame() << " Emergency ! Clearing previously planned path and replanning (st: " << str(state) << ")." << endl;
+			emergency();
 		}
 	}
 
@@ -408,17 +379,23 @@ Trajectory HighwayState::advance(double _car_end_s, double _car_end_d, double _c
 			best = next_states[i];
 		}
 	}
+	#ifdef USE_LOGGING
+		printf("\n");
+	#endif // _DEBUG
 	assert(min_cost != std::numeric_limits<double>::infinity());
-	if (best != state)
+	if (logfile.is_open())
 	{
-		switch (best)
+		if (best != state)
 		{
-		case KL: printf("%ld: -> KL\n", frame_cnt); break;
-		case LCL: printf("%ld:->LCL\n", frame_cnt); break;
-		case LCR: printf("%ld:->LCR\n", frame_cnt); break;
-		default:
-			assert(false);
-			break;
+			switch (best)
+			{
+			case KL: logfile << str_frame() << " -> KL" << endl; break;
+			case LCL: logfile << str_frame() << " -> LCL" << endl; break;
+			case LCR: logfile << str_frame() << " -> LCR" << endl; break;
+			default:
+				assert(false);
+				break;
+			}
 		}
 	}
 
@@ -437,53 +414,36 @@ Trajectory HighwayState::advance(double _car_end_s, double _car_end_d, double _c
 		last_lane_changed_frame_cnt = frame_cnt;
 	}
 
-//	if (state == KL)
-	{
-		double min_dist;
-		int vehicle_front_of_us = get_closest_ahead(car_end_s, lane * LANE_WIDTH + LANE_WIDTH / 2, car_end_dt, predictions, min_dist);
+	double min_dist;
+	int vehicle_front_of_us = get_closest_ahead(car_end_s, lane * LANE_WIDTH + LANE_WIDTH / 2, car_end_dt, predictions, min_dist);
 
-		if (vehicle_front_of_us != -1 && min_dist < MIN_DIST_FROM_CAR_IN_FRONT_OF_US)
+	if (vehicle_front_of_us != -1 && min_dist < MIN_DIST_FROM_CAR_IN_FRONT_OF_US)
+	{
+		if (last_lane_changed_frame_cnt != -1 && min_dist < SAFE_DISTANCE_FOR_LANE_CHANGE_AHEAD/2)
 		{
-			set_optimal_speed(ref_vel - .1);					// too close ! 
-		}
-		else if (vehicle_front_of_us != -1 && predictions.at(vehicle_front_of_us).sdot < ref_vel)
-		{
-			double vdiff = ref_vel - predictions.at(vehicle_front_of_us).sdot;
-			if (min_dist < vdiff * SPEED_ALIGN_MULTIPLER)
-			{
-				set_optimal_speed(predictions.at(vehicle_front_of_us).sdot - FOLLOWING_SPEED_DIFF);
-			}
-			else
-			{
-				// if there's a car ahead of us but far away, don't change speed.
-	//			set_optimal_speed(ref_vel);
-				set_optimal_speed(OPTIMAL_SPEED);
-			}
+			if (logfile.is_open()) logfile << str_frame() << " Emergency ! After lane changing an other vehicle will be dangerously close." << endl;
+			emergency();
 		}
 		else {
+			set_optimal_speed(std::max(predictions.at(vehicle_front_of_us).sdot*0.9, ref_vel - .1));					// too close !
+		}
+	}
+	else if (vehicle_front_of_us != -1 && predictions.at(vehicle_front_of_us).sdot < ref_vel)
+	{
+		double vdiff = ref_vel - predictions.at(vehicle_front_of_us).sdot;
+		if (min_dist < vdiff * SPEED_ALIGN_MULTIPLER)
+		{
+			set_optimal_speed(predictions.at(vehicle_front_of_us).sdot - FOLLOWING_SPEED_DIFF);
+		}
+		else
+		{
+			// if there's a car ahead of us but far away, use optimal speed.
 			set_optimal_speed(OPTIMAL_SPEED);
 		}
 	}
-
-/*	else 
-
-		if (car_end_d > lane * 4.0 + 1.5 && car_end_d < lane * 4.0 + 2.5)
-		{
-		}
-		else {
-			double min_dist;
-			int vehicle_front_of_us = get_closest_ahead(car_end_s, lane * LANE_WIDTH + LANE_WIDTH / 2, car_end_dt, predictions, min_dist);
-			if (vehicle_front_of_us != -1) 
-			{
-				set_optimal_speed(predictions.at(vehicle_front_of_us).sdot - FOLLOWING_SPEED_DIFF);
-			}
-			else 
-			{
-				set_optimal_speed(OPTIMAL_SPEED);
-			}
-		}
-	}*/
+	else {
+		set_optimal_speed(OPTIMAL_SPEED);
+	}
 
 	frame_cnt += 50 - long(round(car_end_dt * 50));
-    return {};
 }
