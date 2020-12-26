@@ -205,7 +205,7 @@ const char* HighwayState::str_frame()
 	return buf;
 }
 
-double HighwayState::calculate_cost(StateType next_state, const map<int, VehicleState>& predictions)
+double HighwayState::calculate_cost(StateType next_state, const map<int, VehicleState>& predictions, std::string *logstr)
 {
 	stringstream ss;
 	double cost = 0.0;
@@ -233,7 +233,12 @@ double HighwayState::calculate_cost(StateType next_state, const map<int, Vehicle
 		if (logfile.is_open()) logfile << ss.str();
 	}
 #ifdef USE_LOGGING
-	printf("%s [%s] - ", state_name(next_state), infvector.c_str());
+	if (logstr)
+	{
+		char buf[512];
+		sprintf(buf, "%s [%s] - ", state_name(next_state), infvector.c_str());
+		*logstr += buf;
+	}
 	if (logfile.is_open()) logfile << state_name(next_state) << " [" << infvector.c_str() << "]" << endl;
 #endif 
 	return cost;
@@ -326,7 +331,7 @@ int HighwayState::get_closest_behind(double s, double d, double dt, const map<in
 	return vehicle_id;
 }
 
-void HighwayState::emergency()
+void HighwayState::emergency(const VehicleState& veh)
 {
 	// clear previous path
 	int new_size = std::min((int)prev_path_x.size(), 2);
@@ -339,7 +344,8 @@ void HighwayState::emergency()
 	car_end_dt = 0.0;
 	ref_vel = car_cur_speed;						// to make it smooth ....
 	last_lane_changed_frame_cnt = frame_cnt;		// stay in that lane for a time
-	lane = int((car_cur_d - 2.0) / 4);				// stay in the lane where we are at the moment
+	lane = int(car_cur_d / LANE_WIDTH);				// stay in the lane where we are at the moment
+	set_optimal_speed(veh.sdot * 0.75);					
 }
 
 // Car_end_s,card_end_d are the position of our car at the end of the earlier planned route (after car_end_dt sec).
@@ -362,8 +368,13 @@ void HighwayState::advance(const map<int, VehicleState>& predictions)
 		{
 			// emergency: a vehicle is on our preplanned path!
 
-			if (logfile.is_open()) logfile << str_frame() << " Emergency ! Clearing previously planned path and replanning (st: " << str(state) << ")." << endl;
-			emergency();
+			if (logfile.is_open())
+			{
+				logfile << str_frame() << " Emergency ! Clearing previously planned path and replanning (st: " << str(state) << ")." << endl;
+				printf("Emergency: there is a vehicle in my preplanned path.\n");
+			}
+
+			emergency(veh);
 		}
 	}
 
@@ -371,17 +382,27 @@ void HighwayState::advance(const map<int, VehicleState>& predictions)
     vector<StateType> next_states = successor_states();
 	StateType best;
 	double min_cost = std::numeric_limits<double>::infinity();
+#ifdef USE_LOGGING
+	static std::string prevlogstr;
+	std::string logstr;
+#endif
 	for (int i = 0; i < next_states.size(); i++)
 	{
-		double c = calculate_cost(next_states[i], predictions);
+		double c = calculate_cost(next_states[i], predictions, &logstr);
 		if (c < min_cost) {
 			min_cost = c;
 			best = next_states[i];
 		}
 	}
-	#ifdef USE_LOGGING
-		printf("\n");
-	#endif // _DEBUG
+
+#ifdef USE_LOGGING
+	if (prevlogstr.compare(logstr) != 0)
+	{
+		printf("[%s] %s\n", str_frame(), logstr.c_str());
+		prevlogstr = logstr;
+	}
+#endif // _DEBUG
+
 	assert(min_cost != std::numeric_limits<double>::infinity());
 	if (logfile.is_open())
 	{
@@ -419,13 +440,18 @@ void HighwayState::advance(const map<int, VehicleState>& predictions)
 
 	if (vehicle_front_of_us != -1 && min_dist < MIN_DIST_FROM_CAR_IN_FRONT_OF_US)
 	{
+		const VehicleState &veh = predictions.at(vehicle_front_of_us);
 		if (last_lane_changed_frame_cnt != -1 && min_dist < SAFE_DISTANCE_FOR_LANE_CHANGE_AHEAD/2)
 		{
-			if (logfile.is_open()) logfile << str_frame() << " Emergency ! After lane changing an other vehicle will be dangerously close." << endl;
-			emergency();
+			if (logfile.is_open())
+			{
+				logfile << str_frame() << " Emergency ! After lane changing an other vehicle will be dangerously close." << endl;
+				printf("Emergency after lane changed.\n");
+			}
+			emergency(veh);
 		}
 		else {
-			set_optimal_speed(std::max(predictions.at(vehicle_front_of_us).sdot*0.9, ref_vel - .1));					// too close !
+			set_optimal_speed(veh.sdot*0.9);					// too close !
 		}
 	}
 	else if (vehicle_front_of_us != -1 && predictions.at(vehicle_front_of_us).sdot < ref_vel)

@@ -102,14 +102,14 @@ private:
 	const char* str_frame();
 	const char* state_name(StateType st);
 	void set_optimal_speed(double v);
-	double calculate_cost(StateType next_state, const map<int, VehicleState>& predications);
+	double calculate_cost(StateType next_state, const map<int, VehicleState>& predications, std::string* logstr);
 	vector<StateType> successor_states();
 
 	// When something unexpected happens and an other is very close or in the previously planned path:
 	// - Drop previously planned path
 	// - Keep in the lane where the car currently is, for at least a few seconds.
 	// - don't modify the speed
-	void emergency();	
+	void emergency(const VehicleState& veh);
 
 };
 

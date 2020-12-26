@@ -19,6 +19,7 @@
 using nlohmann::json;
 using std::string;
 using std::vector;
+using std::min;
 
 HighwayState* gHighwayState = nullptr;
 
@@ -312,11 +313,21 @@ int main() {
                         else 
                         {
                             bool bAddPrevPoint = true;
+#if 0
                             ref_x = new_previous_path_x[prev_size - 1];
 						    ref_y = new_previous_path_y[prev_size - 1];
-						    double ref_x_prev = new_previous_path_x[prev_size - 2];
-						    double ref_y_prev = new_previous_path_y[prev_size - 2];
+                            int prefrelidx = 2;
+                            prefrelidx = min(5, (int)prev_size-1);
+						    double ref_x_prev = new_previous_path_x[prev_size - prefrelidx];
+						    double ref_y_prev = new_previous_path_y[prev_size - prefrelidx];
                             ref_yaw = atan2(ref_y - ref_y_prev, ref_x - ref_x_prev);
+#endif							
+                            ref_x = previous_path_x[prev_size - 1];
+							ref_y = previous_path_y[prev_size - 1];
+							double ref_x_prev = previous_path_x[prev_size - 2];
+							double ref_y_prev = previous_path_y[prev_size - 2];
+							ref_yaw = atan2(ref_y - ref_y_prev, ref_x - ref_x_prev);
+
                             if (ref_x == ref_x_prev && abs(ref_yaw) < 0.0001) {
                                 // spline generator doesn't like when dx=0, so, avoid this case
 							    ref_x_prev = new_previous_path_x[0];
@@ -325,6 +336,12 @@ int main() {
                                 if (ref_x == ref_x_prev && abs(ref_yaw) < 0.0001) {
                                     bAddPrevPoint = false;
                                     ref_yaw = deg2rad(car_yaw);                         // fallback: use the yaw value provided by the simulator
+									double prev_car_x = car_x - cos(ref_yaw);
+									double prev_car_y = car_y - sin(ref_yaw);
+									ptsx.push_back(prev_car_x);
+									ptsx.push_back(car_x);
+									ptsy.push_back(prev_car_y);
+									ptsy.push_back(car_y);
                                 }
                             }
 
@@ -332,9 +349,9 @@ int main() {
                             {
                                 ptsx.push_back(ref_x_prev);
                                 ptsy.push_back(ref_y_prev);
+								ptsx.push_back(ref_x);
+								ptsy.push_back(ref_y);
                             }
-						    ptsx.push_back(ref_x);
-						    ptsy.push_back(ref_y);
                         }
 
                         vector<double> next_wp0 = getXY(car_s + 30, 2 + 4 * gHighwayState->lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
