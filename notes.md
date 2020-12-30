@@ -2,7 +2,7 @@
 Self-Driving Car Engineer Nanodegree Program
    
 ### The Project
-This project is about controlling a car, which is driving on a 3-lane highway. (Or planning paths. Maneuvering.) 
+This goal of this project is to control a car to drive on a 3-lane highway. It includes path planning and finding the car's trajectory correctly. 
 
 # Architecture
 The system consists of two components:
@@ -27,8 +27,7 @@ The controlling logic is based on a finite state machine with 3 states:
 - LCR - Lane change to right, when the car tries to change the lane right.
 
 The change logic of these states is using cost functions. The sum of these cost functions will decide when to change to an other state. 
-
-A cost function will return _infinity_ cost for a _next_state_ when it is dangerous or not safe to change to that state, according to the given cost function. The car's next state will be decided by the minimal total cost in each iterations. 
+A cost function will return _infinity_ cost for a _next_state_ when it is dangerous or not safe to change to that state, according to the given cost function. The car's next state will be decided by the minimal total cost in each iteration. 
 
 These are the 5 cost functions:
 - lane_stay_cost: Slaloming among the lanes is dangerous ! Changing lanes right after a previous lane change operation is punished with an infinite cost. (Lane change will not be permitted for a few seconds)
@@ -41,7 +40,7 @@ These are the 5 cost functions:
 - space_ahead_cost
   - This cost is inversely proportional to the distance of the car in front of us (in the target lane). So, we like broader empty places ahead of us.  
 - speed_difference_cost
-  - There can be a cost from this function when we consider changing lanes. If there is a faster car in the target lane behind us, this cost will be proportional to the speed difference of _us_. 
+  - There can be a cost from this function when we consider changing lanes. If there is a faster car in the target lane behind us, this cost will be proportional to the speed difference of us, and that faster car. 
 
 For trajectory generation, to create smooth paths even for lane changing, I'm using the spline interpolation library which is free to use ( GPL license ) C++ library, and does not depend on any external things, it only depends on STL.
 To work with positions I use the Frenet coordinate system, which is an easy way of representing positions on a road. It's much better than the cartesian X/Y system, because it uses an "s" component which is a distance _along_ the road, and a "d" component with the side-to-side position on the road. s is 0 at the beginning of the road, and it contains the distance in meters. d will be the (perpendicular) distance from the centerline of the road, with negative values on the left side and positive on the right.    
