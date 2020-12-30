@@ -79,7 +79,7 @@ double lane_speed_cost(HighwayState* hw, StateType next_state, const map<int, Ve
 		return std::numeric_limits<double>::infinity();
 	}
 	int vbehind = hw->get_closest_behind(hw->car_end_s, ln * LANE_WIDTH + LANE_WIDTH / 2, hw->car_end_dt, predications, behind_dist);
-	if (next_state != KL && vbehind != -1 && behind_dist < SAFE_DISTANCE_FOR_LANE_CHANGE_BEHIND + hw->car_end_s - hw->car_cur_s)
+	if (next_state != KL && vbehind != -1 && behind_dist < SAFE_DISTANCE_FOR_LANE_CHANGE_BEHIND)
 	{
 		return std::numeric_limits<double>::infinity();
 	}
@@ -149,24 +149,11 @@ VehicleState VehicleState::offset(vector<double> delta, double dt) const
 	return VehicleState(s + delta[0], sdot + delta[1], s2dot + delta[2], d + delta[3], ddot + delta[4], d2dot + delta[5], t);
 }
 
-VehicleState VehicleState::perturb() const
-{
-	std::random_device rd;
-	std::mt19937 e2(rd());
-	std::normal_distribution<> dist0(s, SIGMA_SD[0]);
-	std::normal_distribution<> dist1(sdot, SIGMA_SD[1]);
-	std::normal_distribution<> dist2(s2dot, SIGMA_SD[2]);
-	std::normal_distribution<> dist3(d, SIGMA_SD[3]);
-	std::normal_distribution<> dist4(ddot, SIGMA_SD[4]);
-	std::normal_distribution<> dist5(d2dot, SIGMA_SD[5]);
-	return VehicleState(dist0(e2), dist1(e2), dist2(e2), dist3(e2), dist4(e2), dist5(e2), t);
-}
-
 // -------------------------------------
 HighwayState::HighwayState()
 {
     state = KL;
-	lane = prev_lane = 1;
+	lane = 1;
 	ref_vel = 0.0;
 #ifdef USE_LOGGING
 	logfile.open("log.txt");
@@ -260,10 +247,6 @@ const double MAX_ACCELERATION = 0.15;
 
 void HighwayState::set_optimal_speed(double v)
 {
-	if (v < 10)
-	{
-		int alma = 0;
-	}
     v = std::min(v, OPTIMAL_SPEED);
     v = std::max(v, 0.0);
 
@@ -384,8 +367,8 @@ void HighwayState::advance(const map<int, VehicleState>& predictions)
 	double min_cost = std::numeric_limits<double>::infinity();
 #ifdef USE_LOGGING
 	static std::string prevlogstr;
-	std::string logstr;
 #endif
+	std::string logstr;
 	for (int i = 0; i < next_states.size(); i++)
 	{
 		double c = calculate_cost(next_states[i], predictions, &logstr);
@@ -423,8 +406,8 @@ void HighwayState::advance(const map<int, VehicleState>& predictions)
 	switch (best)
 	{
 	case KL: break;
-	case LCL: prev_lane = lane;  lane = lane - 1; break;
-	case LCR: prev_lane = lane;  lane = lane + 1; break;
+	case LCL: lane = lane - 1; break;
+	case LCR: lane = lane + 1; break;
 	default:
 		assert(false);
 		break;

@@ -36,6 +36,7 @@ string map_file_ = "../data/highway_map.csv";
 // The max s value before wrapping around the track back to 0
 double max_s = 6945.554;
 
+// Process JSON message and generate reply 
 std::string process_message(const char* data, size_t length)
 {
 	std::string msg;
@@ -59,6 +60,7 @@ std::string process_message(const char* data, size_t length)
 				double car_yaw = j[1]["yaw"];
 				double car_speed = j[1]["speed"];
 
+				// save the car's current state 
 				if (gHighwayState)
 				{
 					gHighwayState->car_cur_s = car_s;
@@ -84,6 +86,8 @@ std::string process_message(const char* data, size_t length)
 				vector<double> next_y_vals;
 				vector<double> carpos = getFrenet(car_x, car_y, car_yaw, map_waypoints_x, map_waypoints_y);
 				map<int, VehicleState> predictions;
+
+				// create other vehicles' state in our format (VehicleState)
 				for (auto& it : sensor_fusion)
 				{
 					double vx = it[3];
@@ -103,7 +107,7 @@ std::string process_message(const char* data, size_t length)
 
 				if (gHighwayState)
 				{
-
+					// save the remaining, previously planned path
 					gHighwayState->prev_path_x.clear();
 					gHighwayState->prev_path_y.clear();
 					for (int i = 0; i < prev_size; i++)
@@ -115,9 +119,17 @@ std::string process_message(const char* data, size_t length)
 					gHighwayState->car_end_d = car_d;
 					gHighwayState->car_end_dt = (double)prev_size * 0.02;
 
+
+					// Call our logic function.
+					// This will handle all the driving logic, by using 
+					// - predictions (other vehicles)
+					// - From gHighwayState: car_end_s,car_end_d,car_end_dt, prev_path_x, prev_path_y, car_cur_s, car_cur_d, car_cur_yaw, car_cur_speed
+					// And the result will contain the new path in gHighwayState attributes: 
+					// - prev_path_x, prev_path_y  (As these could be modified !)
+					// - lane, ref_vel (These will be used during generation of the new road points on a spline.
 					gHighwayState->advance(predictions);
 
-					// use the new "prev_path"
+					// use the new "prev_path", it could have been changed !  (@see emergency_mode)
 					prev_size = gHighwayState->prev_path_x.size();
 					vector<double>& new_previous_path_x = gHighwayState->prev_path_x;
 					vector<double>& new_previous_path_y = gHighwayState->prev_path_y;
@@ -129,6 +141,7 @@ std::string process_message(const char* data, size_t length)
 
 					if (prev_size < 2)
 					{
+						// If we have no previous path, use the car's current position, and try to calculate backward using its direction. 
 						double prev_car_x = car_x - cos(ref_yaw);
 						double prev_car_y = car_y - sin(ref_yaw);
 						ptsx.push_back(prev_car_x);
@@ -171,6 +184,7 @@ std::string process_message(const char* data, size_t length)
 						}
 					}
 
+					// Find 3 points on our planned path in 30,60 and 90 meters ahead.
 					vector<double> next_wp0 = getXY(car_s + 30, 2 + 4 * gHighwayState->lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
 					vector<double> next_wp1 = getXY(car_s + 60, 2 + 4 * gHighwayState->lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
 					vector<double> next_wp2 = getXY(car_s + 90, 2 + 4 * gHighwayState->lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
@@ -182,6 +196,8 @@ std::string process_message(const char* data, size_t length)
 					ptsy.push_back(next_wp1[1]);
 					ptsy.push_back(next_wp2[1]);
 
+					// Transform our coordinates, so the car position (or the end of our path) gets to the origin, and rotate it so the path gets almost horizontal. That's necessary for the spline generator. 
+					// Later we will transform them back.
 					for (int i = 0; i < ptsx.size(); i++)
 					{
 						double shift_x = ptsx[i] - ref_x;
@@ -189,9 +205,12 @@ std::string process_message(const char* data, size_t length)
 						ptsx[i] = (shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw));
 						ptsy[i] = (shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw));
 					}
+
+					//Calculate the spline
 					tk::spline s;
 					s.set_points(ptsx, ptsy);
 
+					// put back the remaining (undriven) previous path
 					for (int i = 0; i < prev_size; i++)
 					{
 						next_x_vals.push_back(new_previous_path_x[i]);
@@ -201,6 +220,8 @@ std::string process_message(const char* data, size_t length)
 					double target_y = s(target_x);
 					double target_dist = sqrt(target_x * target_x + target_y * target_y);
 					double x_add_on = 0;
+
+					// And append the necessary number of points to the end of the list, using our spline
 					for (int i = 1; i <= 50 - prev_size; i++)
 					{
 						double N = (target_dist / (0.02 * gHighwayState->ref_vel));
@@ -216,12 +237,6 @@ std::string process_message(const char* data, size_t length)
 
 						x_point += ref_x;
 						y_point += ref_y;
-
-						if (next_x_vals.size() > 0 &&
-							abs(x_point - next_x_vals[next_x_vals.size() - 1]) < 0.0001 &&
-							abs(y_point - next_y_vals[next_y_vals.size() - 1])) {
-							int alma = 0;
-						}
 
 						next_x_vals.push_back(x_point);
 						next_y_vals.push_back(y_point);
@@ -282,12 +297,19 @@ int main() {
 
   h.onConnection([&h](uWS::WebSocket<uWS::SERVER> ws, uWS::HttpRequest req) {
     std::cout << "Connected!!!" << std::endl;
+	gHighwayState = new HighwayState;
   });
 
   h.onDisconnection([&h](uWS::WebSocket<uWS::SERVER> ws, int code,
                          char *message, size_t length) {
     ws.close();
-    std::cout << "Disconnected" << std::endl;
+	if (gHighwayState)
+	{
+		delete gHighwayState;
+		gHighwayState = nullptr;
+	}
+
+	std::cout << "Disconnected" << std::endl;
   });
 
   int port = 4567;
