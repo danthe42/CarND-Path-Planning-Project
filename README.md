@@ -141,5 +141,5 @@ One last note here: regardless of the IDE used, every submitted project must
 still be compilable with cmake and make./
 
 ## Development notes
-There are useful information with details about the working of the controller [here](notes.md). 
+There are useful information with details about the working of the controller [here](Model_Documentation.md). 
 
