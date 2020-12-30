@@ -94,7 +94,7 @@ std::string process_message(const char* data, size_t length)
 					double vy = it[4];
 					double speed = sqrt(vx * vx + vy * vy);
 					// assume the other cars are going straight in their lanes  (ddot=0)
-					predictions.emplace(std::pair(it[0], VehicleState(it[5], speed, 0, it[6], 0, 0)));
+					predictions.emplace(std::pair<int,VehicleState>(it[0], VehicleState(it[5], speed, 0, it[6], 0, 0)));
 				}
 
 				size_t prev_size = previous_path_x.size();
@@ -283,6 +283,12 @@ int main() {
     map_waypoints_dx.push_back(d_x);
     map_waypoints_dy.push_back(d_y);
   }
+	
+	if (map_waypoints_x.size()==0)
+	{
+		printf("Error opening/loading the highway map file: %s", map_file_.c_str());
+		exit(-1);	
+	}
 
   h.onMessage([](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
